@@ -10,17 +10,63 @@ this on a portfolio.
 
 from __future__ import annotations
 
+import os
+import sys
 import uuid
 
 import streamlit as st
 
-from src.agents import get_graph
-from src.config import settings
-from src.ingest import index_stats, ingest, sample_documents
-from src.llm import health_check
-from src.memory import get_memory, resolve_references
-
 st.set_page_config(page_title="Oracle", page_icon="🔮", layout="centered")
+
+
+def _bridge_secrets_to_env() -> None:
+    """Copy Streamlit secrets into the environment before `src.config` loads.
+
+    `src.config` builds its Settings object at import time from environment
+    variables. Streamlit Cloud does not put secrets there — they live in
+    `st.secrets` — so without this bridge a deployed app silently keeps the
+    local Ollama defaults and reports "cannot reach Ollama at localhost",
+    which looks like a networking fault rather than unread configuration.
+
+    `setdefault` so a real environment variable always wins over a secret.
+
+    The whole body is guarded, iteration included: `st.secrets` resolves lazily,
+    so with no secrets.toml present it raises on *access*, not on the attribute
+    lookup. Guarding only the lookup crashes every local run.
+    """
+    try:
+        for key in st.secrets:
+            value = st.secrets[key]
+            if isinstance(value, (str, int, float, bool)):
+                os.environ.setdefault(str(key), str(value))
+    except Exception:
+        return  # no secrets configured — normal when running locally
+
+
+def _patch_sqlite() -> None:
+    """Use pysqlite3 on Linux hosts whose system SQLite is too old for Chroma.
+
+    ChromaDB needs SQLite >= 3.35. Streamlit Community Cloud's base image ships
+    an older one, and the failure is an import-time crash with no obvious link
+    to SQLite. Harmless everywhere else: on Windows and macOS the import simply
+    isn't there and we keep the stdlib module.
+    """
+    try:
+        import pysqlite3  # noqa: F401
+
+        sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+    except ImportError:
+        pass
+
+
+_bridge_secrets_to_env()
+_patch_sqlite()
+
+from src.agents import get_graph  # noqa: E402
+from src.config import settings  # noqa: E402
+from src.ingest import index_stats, ingest, sample_documents  # noqa: E402
+from src.llm import health_check  # noqa: E402
+from src.memory import get_memory, resolve_references  # noqa: E402
 
 NODE_LABELS = {
     "router": "Routing the question",

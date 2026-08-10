@@ -216,15 +216,38 @@ free, and fast.
    contacts.
 3. **Push to GitHub**, then create an app at
    [share.streamlit.io](https://share.streamlit.io) pointing at `app.py`.
-4. **Add secrets** in the app's settings:
+4. **Add secrets** in the app's settings (⋮ → Settings → Secrets), then reboot
+   the app:
 
    ```toml
    ORACLE_PROVIDER = "groq"
    GROQ_API_KEY = "gsk_..."
    ```
 
+   Keys must be **top level**, not nested under a `[section]` — `app.py` copies
+   top-level secrets into the environment before `src.config` is imported, and
+   nested tables are skipped.
+
 That's the only difference between the two environments. Locally you stay on
 Ollama; `src/llm.py` is the only module that knows which is which.
+
+**If the deployed app says "Cannot reach Ollama at localhost":** the secrets
+aren't reaching the config. Either `ORACLE_PROVIDER` isn't set, it's nested
+under a section, or the app wasn't rebooted after saving. The sidebar shows
+which provider is actually live, so it will read `Groq · llama-3.1-8b-instant`
+once it's working.
+
+Two deployment details this repo already handles, both of which fail in
+confusing ways otherwise:
+
+- **Secrets are not environment variables.** `src/config.py` builds its
+  settings at import time from the environment, and Streamlit Cloud exposes
+  secrets only through `st.secrets`. `app.py` bridges them across *before*
+  importing config — otherwise the deployed app silently keeps the local Ollama
+  defaults.
+- **SQLite is too old.** Chroma needs SQLite >= 3.35 and the Streamlit Cloud
+  image ships an older one. `requirements.txt` pulls `pysqlite3-binary` on Linux
+  only, and `app.py` swaps it in at startup.
 
 ---
 

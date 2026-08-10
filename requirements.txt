@@ -13,6 +13,9 @@ torch>=2.2.0                 # CPU wheel is fine
 
 # --- Vector store ---
 chromadb>=0.5.20
+# Chroma needs SQLite >= 3.35; Streamlit Cloud's image ships an older one.
+# Linux-only marker — there are no Windows/macOS wheels and none are needed.
+pysqlite3-binary>=0.5.3; sys_platform == "linux"
 
 # --- Document loading / chunking ---
 pypdf>=5.1.0
