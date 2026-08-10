@@ -1,0 +1,15 @@
+[server]
+# Streamlit's default watcher walks every imported module to set up hot-reload.
+# transformers lazily advertises hundreds of vision modules that need
+# torchvision, which isn't installed (and isn't needed — we only use the text
+# encoder), so the watcher floods the log with ModuleNotFoundError tracebacks.
+# Polling sidesteps the module crawl entirely. Set to "none" to disable
+# hot-reload altogether if you don't need it.
+fileWatcherType = "poll"
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#7C6BF2"
