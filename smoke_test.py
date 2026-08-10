@@ -16,6 +16,42 @@ PASS, FAIL = "  [ok]  ", "  [FAIL]"
 failures: list[str] = []
 
 
+def _write_minimal_pdf(path, lines: list[str]) -> None:
+    """Write a structurally valid single-page PDF, so the PDF path is tested
+    against a real file rather than a fixture someone has to remember to add."""
+    ops = ["BT", "/F1 12 Tf", "72 720 Td", "14 TL"]
+    for line in lines:
+        escaped = line.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+        ops.append(f"({escaped}) Tj T*")
+    ops.append("ET")
+    stream = "\n".join(ops).encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+        b"/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+
+    out, offsets = bytearray(b"%PDF-1.4\n"), []
+    for i, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + body + b"\nendobj\n"
+
+    xref_at = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode() + b"0000000000 65535 f \n"
+    for off in offsets:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += (
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+        f"startxref\n{xref_at}\n%%EOF\n"
+    ).encode()
+
+    path.write_bytes(bytes(out))
+
+
 def check(name: str, fn):
     try:
         detail = fn()
@@ -42,6 +78,7 @@ def main() -> int:
         embed_chunks,
         index_stats,
         ingest,
+        load_document,
         sample_documents,
     )
 
@@ -63,6 +100,45 @@ def main() -> int:
         return f"{len(chunks)} chunks, {overlapped} overlapping boundaries"
 
     check("token chunking + overlap", _chunk)
+
+    def _formats():
+        """PDF and DOCX extraction, on files built here rather than assumed.
+
+        A resume arrives as a PDF more often than anything else, so an
+        unexercised PDF path is the riskiest gap in the whole pipeline.
+        """
+        import shutil
+        import tempfile
+        from pathlib import Path
+
+        tmp = Path(tempfile.mkdtemp(prefix="oracle_fmt_"))
+        try:
+            _write_minimal_pdf(tmp / "resume.pdf", ["Priya Raghavan", "Streaming ingestion with Flink."])
+
+            import docx
+
+            doc = docx.Document()
+            doc.add_paragraph("AWS Certified Solutions Architect, renewed 2025.")
+            doc.save(str(tmp / "certs.docx"))
+
+            (tmp / "talks.txt").write_text("Conference talk on delayed labels.", encoding="utf-8")
+
+            results = {}
+            for path in discover_documents(tmp):
+                text = " ".join(s["text"] for s in load_document(path))
+                assert text.strip(), f"{path.name} extracted nothing"
+                results[path.suffix] = len(text)
+
+            pdf_text = " ".join(s["text"] for s in load_document(tmp / "resume.pdf"))
+            assert "Priya Raghavan" in pdf_text, "PDF text extraction lost content"
+            docx_text = " ".join(s["text"] for s in load_document(tmp / "certs.docx"))
+            assert "Solutions Architect" in docx_text, "DOCX text extraction lost content"
+
+            return " ".join(f"{ext}={n}ch" for ext, n in sorted(results.items()))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    check("pdf / docx / txt extraction", _formats)
 
     def _embed():
         vectors = embed_chunks(["hello world", "vector search"])

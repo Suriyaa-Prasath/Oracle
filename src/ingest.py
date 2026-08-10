@@ -96,7 +96,13 @@ def load_document(path: Path) -> list[dict[str, Any]]:
     file formats.
     """
     suffix = path.suffix.lower()
-    rel = str(path.relative_to(settings.data_dir.parent))
+    try:
+        # Project-relative paths make for readable citations ("data/resume.pdf").
+        rel = str(path.relative_to(settings.data_dir.parent))
+    except ValueError:
+        # `--path` accepts a file anywhere on disk, which relative_to() rejects
+        # outright rather than falling back. Cite it by name in that case.
+        rel = path.name
     base = {"source": rel, "filename": path.name, "doc_type": suffix.lstrip(".")}
 
     if suffix == ".pdf":
