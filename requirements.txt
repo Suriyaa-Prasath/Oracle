@@ -1,0 +1,35 @@
+# --- Core orchestration ---
+langgraph>=0.2.60
+langchain-core>=0.3.30
+langchain-community>=0.3.15
+
+# --- LLM providers (see src/llm.py) ---
+langchain-ollama>=0.2.2      # local path
+langchain-groq>=0.2.3        # hosted path — same Llama 3.1 weights
+
+# --- Embeddings ---
+sentence-transformers>=3.3.1
+torch>=2.2.0                 # CPU wheel is fine
+
+# --- Vector store ---
+chromadb>=0.5.20
+
+# --- Document loading / chunking ---
+pypdf>=5.1.0
+python-docx>=1.1.2
+tiktoken>=0.8.0
+
+# --- Tools ---
+ddgs>=9.0.0                  # web search (successor to duckduckgo-search)
+wikipedia>=1.4.0
+# The calculator uses the stdlib `ast` + `math` — deliberately not sympy,
+# whose parse_expr() calls eval() internally. See src/tools.py.
+
+# --- UI ---
+streamlit>=1.41.0
+
+# --- Config ---
+httpx>=0.27.0                # Ollama health check
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-dotenv>=1.0.1

@@ -1,0 +1,77 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing / linting caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---------- Environment / secrets ----------
+.env
+.env.*
+!.env.example
+
+# ---------- ChromaDB ----------
+# Persisted vector store — rebuild with `python -m src.ingest`
+chroma/
+chroma_db/
+.chroma/
+*.sqlite3
+*.duckdb
+*.parquet
+index/
+
+# ---------- Ollama / model weights ----------
+# Ollama stores models under ~/.ollama (Windows: %USERPROFILE%\.ollama).
+# These lines only matter if a model dir ever lands inside the repo.
+.ollama/
+models/
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.onnx
+
+# sentence-transformers / HuggingFace cache if pinned locally
+.cache/
+hf_cache/
+
+# ---------- Data ----------
+# NOTE: data/ is intentionally NOT ignored. The deployed app rebuilds its
+# index at boot from these files, so they must be in the repo. Everything here
+# is public the moment you deploy — keep phone numbers, addresses, and
+# reference contacts out of it.
+#
+# To keep the corpus private instead, uncomment these and deploy without it:
+# data/*
+# !data/.gitkeep
+# !data/README.md
+
+# ---------- Streamlit ----------
+# config.toml IS committed (watcher + theme settings); secrets never are.
+.streamlit/secrets.toml
+
+# ---------- OS / editors ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
