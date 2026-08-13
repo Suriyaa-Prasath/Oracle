@@ -46,11 +46,33 @@ re-running an identical query that already failed.
 
 ## Tool agent
 
-Three tools are available. Web search runs through DuckDuckGo and needs no API
+Four tools are available. Web search runs through DuckDuckGo and needs no API
 key. Wikipedia lookup returns a short summary plus the article URL, and
 surfaces disambiguation options when a topic is ambiguous. The calculator
 parses expressions into a Python AST and evaluates only nodes it has explicitly
-whitelisted, so untrusted input cannot reach the interpreter.
+whitelisted, so untrusted input cannot reach the interpreter. The calendar tool
+turns a scheduling request into a downloadable iCalendar file.
+
+The calendar tool is the only one taking more than a single argument, so it has
+a dedicated extraction step rather than widening the router's output schema for
+every other tool. That step never asks the model to calculate a date: an
+8-billion-parameter model asked for "next Tuesday" on a Thursday returned the
+following Sunday. Instead the prompt carries a dated calendar of the coming
+week for the model to copy from, and any weekday named in the request is
+enforced against that table in code afterwards.
+
+The tool writes a file rather than calling a calendar API. The application is
+publicly deployed and accepts input from anonymous visitors, so a tool holding
+write credentials to a real calendar account would let any of them create
+events in it. A generated file has no account access and no effect until
+someone chooses to import it.
+
+Results from tools whose output is a fact the user will act on are returned
+word for word rather than summarised. Asked to restate a scheduled time in its
+own words, the model produced a sentence naming a different day from the one in
+the attached file in roughly one run out of six. A confident sentence
+contradicting the file is worse than either error alone, so those results
+bypass generation entirely.
 
 Every tool returns a uniform result object and never raises. Network failures,
 rate limits, and empty result sets all come back as a failed result carrying a

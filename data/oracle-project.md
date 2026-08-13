@@ -29,8 +29,9 @@ Four agents orchestrated as a LangGraph state machine:
 - **Research** — embeds the query and pulls the top-k nearest chunks from
   ChromaDB. Hits below a cosine-similarity threshold are discarded, so "no
   evidence found" is a real signal instead of five irrelevant passages.
-- **Tool** — dispatches DuckDuckGo web search, Wikipedia lookup, or a
-  sandboxed calculator. Tool failures are recorded as observations rather
+- **Tool** — dispatches DuckDuckGo web search, Wikipedia lookup, a sandboxed
+  calculator, or a calendar tool that turns a scheduling request into a
+  downloadable iCalendar file. Tool failures are recorded as observations rather
   than raised, so a rate-limited search degrades the answer instead of
   crashing the request.
 - **Synthesis** — composes the final answer from retrieved evidence and tool

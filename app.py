@@ -189,6 +189,25 @@ def render_trace(state: dict) -> None:
             st.caption("No chunks cleared the similarity threshold.")
 
 
+def render_downloads(state: dict, key_prefix: str) -> None:
+    """Offer any generated .ics file for download.
+
+    The calendar tool returns file contents rather than writing to a calendar
+    account, so this button is the only way the result reaches the user.
+    """
+    for i, call in enumerate(state.get("tool_calls") or []):
+        meta = call.get("metadata") or {}
+        if not call.get("ok") or "ics" not in meta:
+            continue
+        st.download_button(
+            label=f"📅 Add “{meta.get('title', 'event')}” to your calendar",
+            data=meta["ics"],
+            file_name=meta.get("filename", "event.ics"),
+            mime="text/calendar",
+            key=f"{key_prefix}-ics-{i}",
+        )
+
+
 def answer_question(question: str) -> dict:
     """Stream the graph, updating a live status panel as each node runs."""
     memory = get_memory(st.session_state.session_id)
@@ -255,10 +274,11 @@ def main() -> None:
     if not ok:
         st.error(message, icon="⚠️")
 
-    for entry in st.session_state.transcript:
+    for i, entry in enumerate(st.session_state.transcript):
         with st.chat_message(entry["role"]):
             st.markdown(entry["content"])
             if entry.get("state"):
+                render_downloads(entry["state"], key_prefix=f"turn{i}")
                 render_trace(entry["state"])
 
     question = st.chat_input("Ask about my experience, projects, or skills…")
@@ -275,6 +295,7 @@ def main() -> None:
         state = answer_question(question)
         answer = state.get("answer", "Something went wrong.")
         st.markdown(answer)
+        render_downloads(state, key_prefix="live")
         render_trace(state)
 
         citations = state.get("citations") or []

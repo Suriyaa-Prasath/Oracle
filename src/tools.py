@@ -6,6 +6,13 @@ A failed web search should degrade the answer, not crash the graph.
 
 Docstrings here are functional — `get_tool_schemas()` derives the schema the
 LLM sees from the signature and docstring, so they can't drift apart.
+
+Tools
+-----
+`web_search`            DuckDuckGo; no API key needed.
+`wikipedia_lookup`      Short summaries, with disambiguation surfaced.
+`calculator`            Arithmetic over an AST validated node by node.
+`create_calendar_event` Scheduling request -> downloadable .ics file.
 """
 
 from __future__ import annotations
@@ -14,6 +21,8 @@ import ast
 import inspect
 import math
 import operator
+import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -223,10 +232,137 @@ def wikipedia_lookup(topic: str, sentences: int = 3) -> ToolResult:
     ).truncated()
 
 
+# --------------------------------------------------------------------------
+# Calendar
+# --------------------------------------------------------------------------
+#
+# This produces an .ics file for the user to download, rather than writing to a
+# calendar account through an API. The app is publicly deployed and takes input
+# from anonymous visitors, so a tool holding write credentials to a real
+# calendar would let any of them create events in it. A generated file has no
+# account access and no side effects until someone chooses to import it.
+
+_ICS_ESCAPES = {"\\": "\\\\", ";": r"\;", ",": r"\,", "\n": r"\n"}
+
+
+def _ics_escape(value: str) -> str:
+    for char, replacement in _ICS_ESCAPES.items():
+        value = value.replace(char, replacement)
+    return value
+
+
+def _ics_fold(line: str) -> str:
+    """Fold to 75 octets per RFC 5545; unfolded lines break strict parsers."""
+    encoded = line.encode("utf-8")
+    if len(encoded) <= 75:
+        return line
+    parts, start = [], 0
+    while start < len(encoded):
+        end = min(start + (75 if not parts else 74), len(encoded))
+        # Don't split a multi-byte character across the fold.
+        while end > start and (encoded[end - 1] & 0xC0) == 0x80:
+            end -= 1
+        chunk = encoded[start:end].decode("utf-8")
+        parts.append(chunk if not parts else " " + chunk)
+        start = end
+    return "\r\n".join(parts)
+
+
+def create_calendar_event(
+    title: str,
+    start: str,
+    duration_minutes: int = 60,
+    location: str = "",
+    description: str = "",
+) -> ToolResult:
+    """Create a calendar event and return it as a downloadable .ics file.
+
+    Use when the user asks to schedule, book, or set up a meeting, call, or
+    reminder. Produces a file the user imports; it does not write to any
+    calendar account.
+
+    Args:
+        title: Event name, e.g. "Interview with Priya".
+        start: Start time in ISO 8601 format, e.g. "2026-08-14T15:00".
+        duration_minutes: Event length in minutes.
+        location: Optional location or meeting link.
+        description: Optional longer notes.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    if not title.strip():
+        return ToolResult(ok=False, error="An event needs a title.")
+
+    try:
+        begins = datetime.fromisoformat(start.strip().replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return ToolResult(
+            ok=False,
+            error=f"Could not read {start!r} as a date and time. "
+            "Use ISO 8601, e.g. 2026-08-14T15:00.",
+        )
+
+    try:
+        minutes = int(duration_minutes)
+    except (TypeError, ValueError):
+        minutes = 60
+    minutes = max(1, min(minutes, 60 * 24))
+
+    ends = begins + timedelta(minutes=minutes)
+    stamp = "%Y%m%dT%H%M%S"
+    # Times are written without a timezone, which iCalendar reads as floating
+    # local time — the event lands at the stated wall-clock time wherever it is
+    # imported. That matches what someone asking for "3pm Tuesday" expects.
+    uid = f"{uuid.uuid4()}@oracle"
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//Oracle//Multi-agent RAG//EN",
+        "CALSCALE:GREGORIAN",
+        "METHOD:PUBLISH",
+        "BEGIN:VEVENT",
+        f"UID:{uid}",
+        f"DTSTAMP:{datetime.now(timezone.utc).strftime(stamp)}Z",
+        f"DTSTART:{begins.strftime(stamp)}",
+        f"DTEND:{ends.strftime(stamp)}",
+        f"SUMMARY:{_ics_escape(title.strip())}",
+    ]
+    if location.strip():
+        lines.append(f"LOCATION:{_ics_escape(location.strip())}")
+    if description.strip():
+        lines.append(f"DESCRIPTION:{_ics_escape(description.strip())}")
+    lines += ["END:VEVENT", "END:VCALENDAR"]
+
+    ics = "\r\n".join(_ics_fold(line) for line in lines) + "\r\n"
+    when = begins.strftime("%A %d %B %Y at %H:%M")
+    summary = f"Created “{title.strip()}” for {when} ({minutes} min)"
+    if location.strip():
+        summary += f", at {location.strip()}"
+
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "event"
+    return ToolResult(
+        ok=True,
+        content=f"{summary}. The .ics file is ready to download.",
+        metadata={
+            "ics": ics,
+            "filename": f"{slug[:40]}.ics",
+            "title": title.strip(),
+            "start": begins.isoformat(),
+            "end": ends.isoformat(),
+            "duration_minutes": minutes,
+            # Report this result word for word; do not paraphrase it through
+            # the model. See the note on _VERBATIM in src/agents.py.
+            "verbatim": True,
+        },
+    )
+
+
 TOOL_REGISTRY: dict[str, Callable[..., ToolResult]] = {
     "web_search": web_search,
     "calculator": calculator,
     "wikipedia_lookup": wikipedia_lookup,
+    "create_calendar_event": create_calendar_event,
 }
 
 
