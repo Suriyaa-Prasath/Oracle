@@ -101,10 +101,12 @@ career. Choose exactly one destination.
 experience, skills, education, employment history, opinions, and the design or \
 internals of their own named projects. **This is the default — choose it \
 whenever you are unsure.**
-"tool" — only when the answer is a general fact about the outside world that no \
-personal document could contain: what a widely-known technology or company is, \
-current events, or arithmetic.
-"direct" — greetings, small talk, or questions about this chatbot itself.
+"tool" — when the request needs something outside the documents: a general fact \
+about the world, current events, arithmetic, or scheduling a calendar event. \
+Any request to book, schedule, arrange or set up a meeting, call or reminder is \
+"tool", however conversationally it is phrased.
+"direct" — only greetings, small talk, or questions about this chatbot itself. \
+Never for a request that asks for something to be done or looked up.
 
 Available tools:
 {tools}
@@ -117,6 +119,8 @@ Q: Have they used Kafka in production? -> {{"route": "research", "reason": "asks
 Q: What is Apache Kafka? -> {{"route": "tool", "reason": "general definition of a technology", "tool": "wikipedia_lookup", "tool_input": "Apache Kafka"}}
 Q: Who is the CEO of Stripe? -> {{"route": "tool", "reason": "external fact about a company", "tool": "web_search", "tool_input": "CEO of Stripe"}}
 Q: What is 15% of 45000? -> {{"route": "tool", "reason": "arithmetic", "tool": "calculator", "tool_input": "45000 * 0.15"}}
+Q: Set up a 30 minute intro call next Tuesday at 2pm -> {{"route": "tool", "reason": "scheduling request", "tool": "create_calendar_event", "tool_input": "30 minute intro call next Tuesday at 2pm"}}
+Q: Can we book a chat on Friday morning? -> {{"route": "tool", "reason": "scheduling request", "tool": "create_calendar_event", "tool_input": "chat on Friday morning"}}
 Q: hey there -> {{"route": "direct", "reason": "greeting"}}
 
 Conversation so far:
@@ -222,6 +226,103 @@ def research_node(state: OracleState) -> dict[str, Any]:
 # Tool
 # --------------------------------------------------------------------------
 
+_WEEKDAYS = [
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+]
+
+_EVENT_PROMPT = """\
+Extract calendar event details from the request.
+
+Today is {today} ({weekday}). Use this calendar — do not calculate dates \
+yourself:
+{reference}
+
+Assume a 1 hour duration and working hours unless the request says otherwise \
+("morning" = 09:00, "afternoon" = 14:00).
+
+Request: {request}
+
+Respond with JSON only:
+{{"title": "...", "start": "YYYY-MM-DDTHH:MM", "duration_minutes": 60, \
+"location": "", "description": ""}}"""
+
+
+def _upcoming_weekdays(today):
+    """Map each weekday name to its next occurrence strictly after today."""
+    from datetime import timedelta
+
+    upcoming = {}
+    for offset in range(1, 8):
+        day = today + timedelta(days=offset)
+        upcoming.setdefault(day.strftime("%A").lower(), day)
+    return upcoming
+
+
+def _extract_event_args(request: str) -> dict[str, Any] | None:
+    """Turn a natural-language scheduling request into calendar tool arguments.
+
+    Returns None when the model can't produce a usable title and start time —
+    the caller reports that as a tool failure rather than inventing a date,
+    since a confidently wrong meeting time is worse than no event at all.
+
+    An 8B model cannot reliably do date arithmetic: asked for "next Tuesday" on
+    a Thursday, it returned the following Sunday. So it is never asked to
+    calculate. The prompt carries a dated calendar of the coming week, and any
+    weekday named in the request is enforced against that table afterwards —
+    the model only has to copy a date across, and if it fails to, the code
+    corrects it.
+    """
+    from datetime import date, datetime
+
+    today = date.today()
+    upcoming = _upcoming_weekdays(today)
+    reference = "\n".join(
+        f"  {name.capitalize()} = {day.isoformat()}" for name, day in upcoming.items()
+    )
+
+    try:
+        response = get_llm("router", json_mode=True).invoke(
+            _EVENT_PROMPT.format(
+                today=today.isoformat(),
+                weekday=today.strftime("%A"),
+                reference=reference,
+                request=request,
+            )
+        )
+        parsed = _extract_json(str(response.content))
+    except Exception:
+        return None
+
+    title = str(parsed.get("title") or "").strip()
+    start = str(parsed.get("start") or "").strip()
+    if not title or not start:
+        return None
+
+    # If the request named a weekday, that weekday wins over whatever date the
+    # model produced. Deterministic, and it cannot drift.
+    lowered = request.lower()
+    named = next((day for day in _WEEKDAYS if day in lowered), None)
+    if named and named in upcoming:
+        try:
+            proposed = datetime.fromisoformat(start)
+            if proposed.strftime("%A").lower() != named:
+                corrected = datetime.combine(upcoming[named], proposed.time())
+                start = corrected.isoformat(timespec="minutes")
+        except ValueError:
+            start = f"{upcoming[named].isoformat()}T09:00"
+
+    args: dict[str, Any] = {"title": title, "start": start}
+    try:
+        args["duration_minutes"] = int(parsed.get("duration_minutes") or 60)
+    except (TypeError, ValueError):
+        args["duration_minutes"] = 60
+    for field in ("location", "description"):
+        value = parsed.get(field)
+        if isinstance(value, str) and value.strip():
+            args[field] = value.strip()
+    return args
+
+
 def tool_node(state: OracleState) -> dict[str, Any]:
     """Execute the tool the router selected."""
     calls = state.get("tool_calls") or []
@@ -240,6 +341,22 @@ def tool_node(state: OracleState) -> dict[str, Any]:
         args.setdefault("expression", query)
     elif name == "wikipedia_lookup":
         args.setdefault("topic", query)
+    elif name == "create_calendar_event":
+        # The only tool needing more than one field, so it gets a dedicated
+        # extraction call rather than complicating the router's output schema
+        # for every other tool.
+        extracted = _extract_event_args(query)
+        if not extracted:
+            call.update(
+                {
+                    "args": {"raw": query},
+                    "ok": False,
+                    "result": "Could not work out the event details. Try naming the "
+                    "event and a specific date and time.",
+                }
+            )
+            return {"tool_calls": calls, "trace": [*state.get("trace", []), "tool"]}
+        args = extracted
     else:
         args.setdefault("query", query)
 
@@ -249,6 +366,9 @@ def tool_node(state: OracleState) -> dict[str, Any]:
             "args": args,
             "ok": result.ok,
             "result": result.content if result.ok else (result.error or "failed"),
+            # Carried through for tools that produce an artifact rather than
+            # just text — the calendar tool's .ics reaches the UI this way.
+            "metadata": result.metadata,
         }
     )
 
@@ -280,6 +400,24 @@ Document evidence:
 
 {tool_section}
 Question: {question}
+
+Answer:"""
+
+_TOOL_ANSWER_PROMPT = """\
+Answer the user using only the tool output below. Be brief and natural.
+
+Do not apologise, do not mention documents or resumes, and do not mention that \
+a tool was used — just state the result. If a calendar event was created, say \
+what was scheduled and when, and tell the user the file is ready to download.
+
+Copy any date, time or number **exactly** as it appears in the tool output. \
+Never reformat, recalculate or restate it in your own words — the tool output \
+is authoritative and the user is acting on it.
+
+Conversation so far:
+{history}
+
+{tools}Question: {question}
 
 Answer:"""
 
@@ -330,6 +468,37 @@ def synthesis_node(state: OracleState) -> dict[str, Any]:
             f"Tool `{c['name']}` returned:\n{c['result']}" for c in tool_calls
         )
         tool_section = f"Tool results:\n{rendered}\n\n"
+
+    # Some tool results are facts the user will act on, not material to
+    # summarise. Asked to restate a scheduled date in its own words, an 8B
+    # model got it wrong roughly one run in six — writing "Saturday 15 August"
+    # above a calendar file that correctly said Friday 14 August. A confident
+    # sentence contradicting the attached file is worse than either being wrong
+    # alone, and no amount of prompting made it reliable. Tools that set
+    # `verbatim` have their own wording returned untouched, which is also a
+    # generation call saved.
+    verbatim = next(
+        (c for c in tool_calls if c.get("ok") and (c.get("metadata") or {}).get("verbatim")),
+        None,
+    )
+    if verbatim:
+        return {"answer": str(verbatim["result"]).strip(), "citations": [], "trace": trace}
+
+    # A tool answered and no documents were needed. The document-grounded
+    # prompt below opens by apologising for having no evidence, which reads as
+    # a failure even when the tool succeeded — so answer from the tool alone.
+    if tool_calls and not chunks:
+        try:
+            response = get_llm("synthesis").invoke(
+                _TOOL_ANSWER_PROMPT.format(
+                    history=state.get("history") or "(none)",
+                    tools=tool_section,
+                    question=question,
+                )
+            )
+            return {"answer": str(response.content).strip(), "citations": [], "trace": trace}
+        except Exception as exc:
+            return {"answer": _llm_error(exc), "citations": [], "trace": trace}
 
     if not chunks and not tool_calls:
         return {

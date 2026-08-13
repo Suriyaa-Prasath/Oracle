@@ -225,6 +225,40 @@ def main() -> int:
         return f"{len(hostile)} payloads rejected, no execution, maths intact"
 
     check("calculator rejects code execution", _calc_safety)
+    def _calendar():
+        from datetime import datetime
+
+        from src.tools import create_calendar_event
+
+        result = create_calendar_event(
+            title="Intro call; staff role",
+            start="2026-08-18T14:00",
+            duration_minutes=30,
+            description="Line one\nline two",
+        )
+        assert result.ok, result.error
+        ics = result.metadata["ics"]
+
+        for required in ["BEGIN:VCALENDAR", "BEGIN:VEVENT", "UID:", "DTSTAMP:",
+                         "DTSTART:20260818T140000", "DTEND:20260818T143000",
+                         "END:VEVENT", "END:VCALENDAR"]:
+            assert required in ics, f"malformed .ics: missing {required}"
+        assert "\r\n" in ics, "iCalendar requires CRLF"
+        assert r"role" in ics and r"\;" in ics, "semicolons must be escaped"
+        assert r"\n" in ics, "newlines in DESCRIPTION must be escaped"
+        assert all(len(l.encode()) <= 75 for l in ics.split("\r\n")), "line over 75 octets"
+        assert result.metadata.get("verbatim"), "calendar results must not be paraphrased"
+
+        # Bad input must fail rather than invent a date.
+        assert not create_calendar_event(title="", start="2026-08-18T14:00").ok
+        assert not create_calendar_event(title="X", start="sometime next week").ok
+
+        span = datetime.fromisoformat(result.metadata["end"]) - datetime.fromisoformat(
+            result.metadata["start"]
+        )
+        return f"valid .ics, {int(span.total_seconds() // 60)} min event, bad input rejected"
+
+    check("calendar event -> .ics", _calendar)
     check("tool schemas", lambda: f"{len(get_tool_schemas())} tools: {', '.join(t['name'] for t in get_tool_schemas())}")
     check("unknown tool handled", lambda: "handled" if not run_tool("nope").ok else "LEAKED")
 

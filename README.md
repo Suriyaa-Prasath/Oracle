@@ -52,8 +52,12 @@ deciding afterwards meant paying for a full generation and discarding it.
 - **Research** — embeds the query and pulls the top-k chunks from Chroma.
   Below-threshold hits are dropped, so "no evidence" is a real signal rather
   than five irrelevant chunks.
-- **Tool** — dispatches web search, Wikipedia, or the calculator. Tool failures
-  become observations, never exceptions.
+- **Tool** — dispatches web search, Wikipedia, the calculator, or the calendar
+  tool (which returns a downloadable `.ics`, not an API write — the app is
+  public, so a tool with calendar credentials would let any visitor create
+  events in a real account). Tool failures become observations, never
+  exceptions. Results the user will act on, like a scheduled time, are returned
+  verbatim rather than paraphrased through the model.
 - **Synthesis** — writes the answer from evidence only, with `[n]` citations
   the UI expands back into sources. Only citations the answer actually
   referenced are surfaced.
