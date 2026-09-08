@@ -53,6 +53,7 @@ class OracleState(TypedDict, total=False):
     route: Route
     reasoning: str                       # why the router chose that route
     chunks: list[dict[str, Any]]         # retrieved evidence
+    retrieval_error: str                 # set when retrieval raised; stops retries
     tool_calls: list[dict[str, Any]]     # {name, args, ok, result}
     answer: str
     citations: list[dict[str, Any]]
@@ -200,9 +201,17 @@ def research_node(state: OracleState) -> dict[str, Any]:
     try:
         hits: list[RetrievedChunk] = retrieve(question, top_k=top_k, score_threshold=threshold)
     except Exception as exc:
+        # Must advance `iterations` like the success path does. Returning
+        # without it left the counter at zero, so the retry edge below saw an
+        # empty result and an untouched budget and sent the graph back into
+        # research forever — a failing retrieval span until LangGraph's
+        # recursion limit. `retrieval_error` also makes the retry pointless by
+        # construction: a call that raised will raise again.
         return {
             "chunks": [],
+            "retrieval_error": str(exc),
             "reasoning": f"retrieval failed: {exc}",
+            "iterations": iterations + 1,
             "trace": [*state.get("trace", []), "research"],
         }
 
@@ -500,6 +509,16 @@ def synthesis_node(state: OracleState) -> dict[str, Any]:
         except Exception as exc:
             return {"answer": _llm_error(exc), "citations": [], "trace": trace}
 
+    if state.get("retrieval_error") and not chunks and not tool_calls:
+        return {
+            "answer": (
+                "I could not search my documents just now — the vector "
+                f"store returned an error: {state['retrieval_error']}"
+            ),
+            "citations": [],
+            "trace": trace,
+        }
+
     if not chunks and not tool_calls:
         return {
             "answer": (
@@ -555,6 +574,8 @@ def after_research(state: OracleState) -> str:
     """
     if state.get("chunks"):
         return "synthesis"
+    if state.get("retrieval_error"):
+        return "synthesis"  # retrying a call that raised will raise again
     if state.get("iterations", 0) >= settings.max_iterations:
         return "synthesis"  # out of retries: let synthesis say so honestly
     return "research"
@@ -612,7 +633,9 @@ def run(question: str, history: str = "") -> OracleState:
         "iterations": 0,
         "trace": [],
     }
-    return get_graph().invoke(initial)
+    # Backstop against any future edge bug: the graph is shallow, so a run
+    # needing more than this many steps is looping, not working.
+    return get_graph().invoke(initial, {"recursion_limit": 12})
 
 
 if __name__ == "__main__":

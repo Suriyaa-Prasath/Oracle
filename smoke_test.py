@@ -287,6 +287,60 @@ def main() -> int:
 
     check("graph compiles", lambda: f"nodes: {', '.join(build_graph().get_graph().nodes)}")
 
+    def _no_runaway_loop():
+        """A failing retrieval must not spin the graph.
+
+        Regression: the research node's exception path returned without
+        `iterations`, so the retry edge saw an empty result and an untouched
+        budget and re-entered research until LangGraph's recursion limit. In
+        the deployed app that rendered as "Searching documents" sixteen times
+        and no answer.
+        """
+        import src.agents as A
+
+        original = A.retrieve
+        seen = {"raises": 0, "empty": 0}
+
+        def raises(*a, **k):
+            seen["raises"] += 1
+            raise RuntimeError("vector store unavailable")
+
+        def empty(*a, **k):
+            seen["empty"] += 1
+            return []
+
+        def run_with(stub):
+            A.retrieve = stub
+            A._GRAPH = None
+            start = {"question": "x", "rewritten_question": "x", "history": "",
+                     "chunks": [], "tool_calls": [], "iterations": 0, "trace": []}
+            final = dict(start)
+            for update in A.get_graph().stream(start, stream_mode="updates",
+                                               config={"recursion_limit": 12}):
+                for _, patch in update.items():
+                    final.update(patch or {})
+            return final
+
+        try:
+            failed = run_with(raises)
+            assert failed["trace"].count("research") == 1, (
+                f"raising retrieval retried {failed['trace'].count('research')} times"
+            )
+            assert failed.get("retrieval_error"), "error not recorded in state"
+            assert "error" in failed.get("answer", "").lower(), "error not surfaced to the user"
+
+            blank = run_with(empty)
+            visits = blank["trace"].count("research")
+            assert visits <= settings.max_iterations + 1, f"empty retrieval looped {visits}x"
+        finally:
+            A.retrieve = original
+            A._GRAPH = None
+
+        return f"raising=1 visit, empty={visits} visits, both terminate"
+
+    check("retry loop cannot run away", _no_runaway_loop)
+
+
     # ------------------------------------------------------------------- LLM
     print("\n--- LLM connectivity ---")
     from src.llm import health_check
