@@ -9,7 +9,7 @@ Runs local-first on Ollama with **Llama 3.1**, no API keys and no data leaving
 the machine. The public demo runs the same model on Groq, because Streamlit
 Community Cloud has no GPU — one environment variable switches between them.
 
-**[Live demo →](#)** · _(add your URL after deploying)_
+**[Live demo → oraclerag.streamlit.app](https://oraclerag.streamlit.app/)**
 
 ---
 

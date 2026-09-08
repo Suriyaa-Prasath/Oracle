@@ -67,12 +67,44 @@ def health_check() -> tuple[bool, str]:
     Returns `(ok, message)`. The UI calls this on startup so a stopped Ollama
     shows a clear banner instead of a connection traceback on first question.
     """
+    import httpx
+
     if settings.provider == "groq":
         if not settings.groq_api_key:
-            return False, "GROQ_API_KEY is not set."
-        return True, f"Groq · {settings.groq_model}"
+            return False, (
+                "GROQ_API_KEY is not set. Add it to Streamlit secrets "
+                "(top level, not under a section) and reboot the app."
+            )
+        # Actually call Groq rather than trusting that a non-empty string is a
+        # working key. Checking only that the setting exists reported healthy
+        # for a revoked, mistyped or rate-limited key, and the failure then
+        # surfaced on the visitor's first question instead of in the sidebar.
+        # The models endpoint costs nothing — no generation is spent.
+        try:
+            resp = httpx.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                timeout=8.0,
+            )
+        except Exception as exc:
+            return False, f"Cannot reach Groq: {exc}"
 
-    import httpx
+        if resp.status_code in (401, 403):
+            return False, "Groq rejected the API key. Check GROQ_API_KEY."
+        if resp.status_code == 429:
+            return False, "Groq rate limit reached. Answers will fail until it resets."
+        if resp.status_code >= 400:
+            return False, f"Groq returned HTTP {resp.status_code}."
+
+        available = {m.get("id") for m in resp.json().get("data", [])}
+        if available and settings.groq_model not in available:
+            return False, (
+                f"Model '{settings.groq_model}' is not available on this Groq "
+                f"account. Set ORACLE_GROQ_MODEL to one of: "
+                f"{', '.join(sorted(m for m in available if 'llama' in m)[:4])}"
+            )
+
+        return True, f"Groq · {settings.groq_model}"
 
     try:
         resp = httpx.get(f"{settings.ollama_host}/api/tags", timeout=5.0)
