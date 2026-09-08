@@ -46,6 +46,35 @@ def embed_query(query: str) -> list[float]:
     ).tolist()
 
 
+def _query_collection(query: str, where: dict[str, Any] | None):
+    """Query Chroma, reopening the client once if the handle has gone bad.
+
+    The collection handle is cached process-wide, while Streamlit serves each
+    session on its own thread. A handle that has been invalidated underneath us
+    raises on use, and the cached object stays broken for every later request.
+    Dropping the cache and retrying once turns a permanently wedged deployment
+    into a single slow request. A second failure is a real error and propagates
+    to the caller, which records it and stops.
+    """
+    for attempt in (1, 2):
+        try:
+            collection = get_collection()
+            total = collection.count()
+            if total == 0:
+                return None
+            return collection.query(
+                query_embeddings=[embed_query(query)],
+                n_results=min(settings.fetch_k, total),
+                where=where or None,
+                include=["documents", "metadatas", "distances"],
+            )
+        except Exception:
+            if attempt == 2:
+                raise
+            get_collection.cache_clear()
+    return None
+
+
 def retrieve(
     query: str,
     top_k: int | None = None,
@@ -60,16 +89,9 @@ def retrieve(
     top_k = top_k or settings.top_k
     threshold = settings.score_threshold if score_threshold is None else score_threshold
 
-    collection = get_collection()
-    if collection.count() == 0:
+    result = _query_collection(query, where)
+    if result is None:
         return []
-
-    result = collection.query(
-        query_embeddings=[embed_query(query)],
-        n_results=min(settings.fetch_k, collection.count()),
-        where=where or None,
-        include=["documents", "metadatas", "distances"],
-    )
 
     documents = (result.get("documents") or [[]])[0]
     metadatas = (result.get("metadatas") or [[]])[0]
