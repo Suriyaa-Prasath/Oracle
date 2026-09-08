@@ -62,6 +62,8 @@ def _patch_sqlite() -> None:
 _bridge_secrets_to_env()
 _patch_sqlite()
 
+from langgraph.errors import GraphRecursionError  # noqa: E402
+
 from src.agents import get_graph  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.ingest import index_stats, ingest, sample_documents  # noqa: E402
@@ -229,10 +231,39 @@ def answer_question(question: str) -> dict:
         }
 
         final: dict = dict(initial)
-        for update in load_graph().stream(initial, stream_mode="updates"):
-            for node, patch in update.items():
-                status.write(NODE_LABELS.get(node, node))
-                final.update(patch or {})
+        try:
+            # The recursion limit belongs on every entry point, not just the
+            # CLI one. Without it here the app used LangGraph's default of 25,
+            # so a looping edge printed "Searching documents" over and over and
+            # then crashed the whole page with a redacted error.
+            for update in load_graph().stream(
+                initial, stream_mode="updates", config={"recursion_limit": 12}
+            ):
+                for node, patch in update.items():
+                    status.write(NODE_LABELS.get(node, node))
+                    final.update(patch or {})
+        except GraphRecursionError:
+            # A bug in the graph is not the visitor's problem: report it in
+            # the chat like any other failure rather than replacing the page
+            # with a stack trace.
+            status.update(label="Stopped", state="error", expanded=False)
+            visits = " -> ".join(final.get("trace", [])) or "no nodes completed"
+            # Carry whatever the graph learned before it span: on a remote
+            # deployment this message is the only window into why.
+            detail = final.get("retrieval_error") or final.get("reasoning") or ""
+            final["answer"] = (
+                "I got stuck in a loop working that out and stopped myself. "
+                "This is a bug, not something you did. "
+                f"Path taken: `{visits}`"
+                + (f" — last state: `{detail}`" if detail else "")
+            )
+            final.setdefault("citations", [])
+            return final
+        except Exception as exc:
+            status.update(label="Failed", state="error", expanded=False)
+            final["answer"] = f"Something went wrong answering that: `{exc}`"
+            final.setdefault("citations", [])
+            return final
 
         status.update(label="Done", state="complete", expanded=False)
 
