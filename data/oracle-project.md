@@ -8,8 +8,7 @@ then re-ingest.
 
 Oracle is a multi-agent retrieval-augmented generation system that answers
 questions about my resume, projects, and career history. It runs local-first
-on Ollama with Llama 3.1 and deploys publicly on Streamlit with the same model
-served by Groq.
+on Ollama with Llama 3.1 and deploys publicly on Streamlit, served by Groq.
 
 ## Problem
 
@@ -53,9 +52,15 @@ duplicating the corpus.
 
 **The provider is abstracted behind one module.** Streamlit Community Cloud
 has no GPU and roughly a gigabyte of RAM, so Ollama cannot run there. Groq
-serves the same Llama 3.1 weights over an API, which means the deployed demo
-runs the identical model as local development and switching between them is a
-single environment variable.
+serves open-weight models over an API. Switching between them is a single
+environment variable.
+
+The model is not hardcoded. Hosted providers retire model identifiers, and the
+one this project targeted was deprecated for free tiers partway through
+development; the deployed application returned a 404 on every question while
+its status line still read healthy, because the check verified only that a key
+was configured. The provider module now asks the account what it can serve and
+names any substitution in the interface.
 
 **Conversation memory rewrites follow-ups into standalone questions.**
 Retrieval is stateless: "what about that one?" embeds to nothing useful. A

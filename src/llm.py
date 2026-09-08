@@ -4,9 +4,12 @@ Oracle is local-first: `ollama` serving `llama3.1` on your own machine, no API
 keys, no data leaving the box. But Streamlit Community Cloud has ~1GB of RAM
 and no GPU, so the *deployed* demo cannot run Ollama.
 
-Groq serves the same Llama 3.1 weights over an API, so switching providers
-changes where inference happens without changing which model answers. Every
-other module asks for `get_llm()` and stays provider-agnostic.
+Groq serves open-weight models over an API. Which one is decided at runtime by
+`resolve_groq_model()` rather than hardcoded, because hosted ids are retired —
+`llama-3.1-8b-instant` was deprecated for free tiers in June 2026 and the
+deployed app started 404ing on every question. Llama is preferred whenever the
+account can serve it, so the local and hosted models match where possible.
+Every other module asks for `get_llm()` and stays provider-agnostic.
 
     ORACLE_PROVIDER=ollama   # local dev (default)
     ORACLE_PROVIDER=groq     # deployed; needs GROQ_API_KEY

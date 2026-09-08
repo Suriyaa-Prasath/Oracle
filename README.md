@@ -6,8 +6,11 @@ or answer directly; a synthesis agent writes the answer with citations back to
 the source document — and the UI shows the whole path it took.
 
 Runs local-first on Ollama with **Llama 3.1**, no API keys and no data leaving
-the machine. The public demo runs the same model on Groq, because Streamlit
-Community Cloud has no GPU — one environment variable switches between them.
+the machine. Streamlit Community Cloud has no GPU, so the public demo runs on
+Groq instead — one environment variable switches between them, and the model is
+discovered at runtime rather than hardcoded, because hosted model ids get
+retired (Groq deprecated `llama-3.1-8b-instant` for free tiers in June 2026,
+and the deployed app now falls back to Groq's own recommended replacement).
 
 **[Live demo → oraclerag.streamlit.app](https://oraclerag.streamlit.app/)**
 
@@ -210,8 +213,14 @@ vulnerability — see the comment above `calculator` in `src/tools.py`.
 ## Deploying the public demo
 
 Ollama can't run on Streamlit Community Cloud (no GPU, ~1 GB RAM), so the
-deployed instance points at Groq — which serves the same Llama 3.1 weights,
-free, and fast.
+deployed instance points at Groq instead.
+
+Groq deprecated `llama-3.1-8b-instant` for free and developer tiers in June
+2026, so the hosted demo no longer runs Llama. `src/llm.py` asks the account
+which models it can serve and falls through a preference order led by Llama, so
+Llama is used wherever it is available and a substitution is named in the
+sidebar rather than made silently. Local development is unaffected — that is
+still Llama 3.1 on Ollama.
 
 1. **Get a free Groq key** at [console.groq.com/keys](https://console.groq.com/keys).
 2. **Replace the demo documents** and commit your `data/` folder. The app

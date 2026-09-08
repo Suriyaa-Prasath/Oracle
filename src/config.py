@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     collection_name: str = "oracle_docs"
 
     # ------------------------------------------------------------ provider
-    # "ollama" = local (dev, demos). "groq" = hosted, same Llama 3.1 weights,
-    # used for the publicly deployed app where Ollama cannot run.
+    # "ollama" = local (dev, demos). "groq" = hosted, used for the publicly
+    # deployed app where Ollama cannot run. The Groq model is resolved at
+    # runtime (see src/llm.py) because hosted ids get retired.
     provider: Literal["ollama", "groq"] = "ollama"
 
     ollama_host: str = "http://localhost:11434"

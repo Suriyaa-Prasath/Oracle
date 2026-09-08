@@ -8,8 +8,8 @@ what allows the router's decision, the retrieved chunks, and the tool results
 to accumulate independently before synthesis reads all of them.
 
 The entry point is the router. Two conditional edges control flow: one out of
-the router selecting the destination, and one out of synthesis deciding whether
-to stop or retry retrieval.
+the router selecting the destination, and one out of research deciding whether
+to retry retrieval or hand off to synthesis.
 
 ## Router agent
 
@@ -98,9 +98,13 @@ two of five retrieved chunks does not display five sources.
 
 ## Retry loop
 
-The conditional edge out of synthesis returns to research only when the route
-was document retrieval, no chunks were found, and the iteration count is below
-the configured cap. All three conditions must hold, so the graph cannot spin.
+The conditional edge sits on the exit from research, not from synthesis.
+Whether retrieval found anything is knowable the moment research returns, and
+synthesis is by far the most expensive node, so deciding afterwards meant
+paying for a full generation and discarding it. Research retries only when no
+chunks were found and the iteration count is below the configured cap, widening
+top-k and relaxing the threshold rather than repeating a query that already
+failed, so the graph cannot spin.
 
 ## Ingestion
 
@@ -148,11 +152,22 @@ The provider is abstracted behind a single module. Local development runs
 Ollama with Llama 3.1 on the developer's own machine, with no API keys and no
 data leaving the box. Streamlit Community Cloud provides roughly a gigabyte of
 RAM and no GPU, which cannot host an 8-billion-parameter model, so the deployed
-instance points at Groq — which serves the same Llama 3.1 weights over an API.
+instance points at Groq instead.
 
-The consequence is that the deployed demo runs the identical model as local
-development, and switching between them is one environment variable. No other
-module in the codebase knows where inference happens.
+The model is discovered at runtime rather than hardcoded. Hosted providers
+retire model ids: the identifier this project originally targeted was
+deprecated for free tiers partway through development, and the deployed app
+began returning a 404 while its status line still showed green, because the
+health check only verified that an API key had been configured rather than that
+the service could answer. The provider module now asks the account which models
+it can serve, prefers the configured one, and otherwise falls through a
+preference order, naming any substitution in the interface rather than making
+it silently.
+
+Local development runs Llama 3.1 through Ollama. The hosted instance runs
+whichever chat model the account can serve, which is not necessarily the same
+model. Switching between providers remains one environment variable, and no
+other module in the codebase knows where inference happens.
 
 The embedding model was chosen partly for this constraint: at 384 dimensions
 and roughly eighty megabytes, it runs comfortably on free-tier CPU hosting,

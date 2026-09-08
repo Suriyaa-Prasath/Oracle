@@ -97,9 +97,13 @@ on free hosting. Committing to local execution means no live demo. Committing
 to a hosted API means giving up the privacy property and the no-API-key
 property that motivated local execution in the first place.
 
-Abstracting the provider preserves both. The same weights answer in both
-environments, so the behaviour observed during development is the behaviour
-deployed, and neither claim about the system needs qualification.
+Abstracting the provider preserves both. Local development keeps the privacy
+and no-API-key properties; the hosted instance makes the demo reachable.
+
+The abstraction earned itself back when the hosted model identifier was
+deprecated for free tiers mid-project. Because only one module knew where
+inference happened, adapting meant changing that module to discover the model
+at runtime rather than touching the graph, the tools or the interface.
 
 ## Why conversation memory rewrites queries rather than concatenating history
 
