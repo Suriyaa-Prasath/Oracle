@@ -52,8 +52,12 @@ def get_llm(role: str = "synthesis", json_mode: bool = False) -> BaseChatModel:
 
     from langchain_groq import ChatGroq
 
+    # Resolved, not configured: the sidebar and the actual request must name the
+    # same model, or a green status line sits above a 404.
+    resolved, _ = resolve_groq_model()
+
     return ChatGroq(
-        model=settings.groq_model,
+        model=resolved or settings.groq_model,
         api_key=settings.groq_api_key,
         temperature=temperature,
         timeout=settings.request_timeout,
@@ -75,36 +79,11 @@ def health_check() -> tuple[bool, str]:
                 "GROQ_API_KEY is not set. Add it to Streamlit secrets "
                 "(top level, not under a section) and reboot the app."
             )
-        # Actually call Groq rather than trusting that a non-empty string is a
-        # working key. Checking only that the setting exists reported healthy
-        # for a revoked, mistyped or rate-limited key, and the failure then
-        # surfaced on the visitor's first question instead of in the sidebar.
-        # The models endpoint costs nothing — no generation is spent.
-        try:
-            resp = httpx.get(
-                "https://api.groq.com/openai/v1/models",
-                headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                timeout=8.0,
-            )
-        except Exception as exc:
-            return False, f"Cannot reach Groq: {exc}"
 
-        if resp.status_code in (401, 403):
-            return False, "Groq rejected the API key. Check GROQ_API_KEY."
-        if resp.status_code == 429:
-            return False, "Groq rate limit reached. Answers will fail until it resets."
-        if resp.status_code >= 400:
-            return False, f"Groq returned HTTP {resp.status_code}."
-
-        available = {m.get("id") for m in resp.json().get("data", [])}
-        if available and settings.groq_model not in available:
-            return False, (
-                f"Model '{settings.groq_model}' is not available on this Groq "
-                f"account. Set ORACLE_GROQ_MODEL to one of: "
-                f"{', '.join(sorted(m for m in available if 'llama' in m)[:4])}"
-            )
-
-        return True, f"Groq · {settings.groq_model}"
+        model, note = resolve_groq_model()
+        if model is None:
+            return False, note
+        return True, f"Groq · {model}" + (f" — {note}" if note else "")
 
     try:
         resp = httpx.get(f"{settings.ollama_host}/api/tags", timeout=5.0)
@@ -122,3 +101,87 @@ def health_check() -> tuple[bool, str]:
         return False, f"Model '{wanted}' not pulled. Run: ollama pull {wanted}"
 
     return True, f"Ollama · {wanted}"
+
+
+# --------------------------------------------------------------------------
+# Groq model discovery
+# --------------------------------------------------------------------------
+#
+# Hardcoding a hosted model id is a slow-motion outage. `llama-3.1-8b-instant`
+# is listed as a current production model in Groq's own docs, yet this account
+# gets a 404 for it — access differs per account, and ids are retired over
+# time. So the model is discovered at runtime: use the configured one when the
+# account can serve it, otherwise fall back through a preference order and say
+# plainly in the UI that a substitution happened.
+
+# Llama first, so the "same model locally and deployed" property holds whenever
+# the account can serve it at all.
+_GROQ_PREFERENCE = [
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "groq/compound-mini",
+    "groq/compound",
+]
+
+# Substrings marking models that cannot answer a chat prompt: speech, embedding
+# and the prompt-guard safety classifiers.
+_NOT_CHAT = ("whisper", "tts", "embed", "guard", "rerank", "moderation")
+
+
+def _is_chat_model(model_id: str) -> bool:
+    return not any(marker in model_id.lower() for marker in _NOT_CHAT)
+
+
+@functools.lru_cache(maxsize=1)
+def available_groq_models() -> tuple[str, ...]:
+    """Model ids this Groq account can actually serve. Empty on failure."""
+    import httpx
+
+    try:
+        resp = httpx.get(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+            timeout=8.0,
+        )
+        resp.raise_for_status()
+    except Exception:
+        return ()
+    return tuple(sorted(m.get("id", "") for m in resp.json().get("data", []) if m.get("id")))
+
+
+def resolve_groq_model() -> tuple[str | None, str]:
+    """Pick a usable Groq chat model.
+
+    Returns `(model_id, note)`. `model_id` is None when nothing usable exists,
+    and `note` then explains why. When a substitute is chosen the note names
+    what was asked for, so the swap is never silent.
+    """
+    models = available_groq_models()
+    if not models:
+        return None, "Cannot reach Groq, or the API key was rejected."
+
+    if settings.groq_model in models:
+        return settings.groq_model, ""
+
+    chat = [m for m in models if _is_chat_model(m)]
+    if not chat:
+        return None, (
+            f"This Groq account serves no chat models "
+            f"(available: {', '.join(models[:5])})."
+        )
+
+    for candidate in _GROQ_PREFERENCE:
+        if candidate in chat:
+            return candidate, f"'{settings.groq_model}' unavailable on this account"
+
+    return chat[0], f"'{settings.groq_model}' unavailable on this account"
+
+
+def active_model_name() -> str:
+    """Model actually used for generation, for display in the UI."""
+    if settings.provider != "groq":
+        return settings.model_name
+    resolved, _ = resolve_groq_model()
+    return resolved or settings.groq_model

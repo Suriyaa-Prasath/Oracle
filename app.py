@@ -65,7 +65,7 @@ _patch_sqlite()
 from src.agents import get_graph  # noqa: E402
 from src.config import settings  # noqa: E402
 from src.ingest import index_stats, ingest, sample_documents  # noqa: E402
-from src.llm import health_check  # noqa: E402
+from src.llm import active_model_name, health_check  # noqa: E402
 from src.memory import get_memory, resolve_references  # noqa: E402
 
 NODE_LABELS = {
@@ -156,7 +156,7 @@ def render_sidebar(stats: dict) -> None:
             st.session_state.transcript = []
             st.rerun()
 
-        st.caption(f"Model: `{settings.model_name}` · Embeddings: `{settings.embed_model}`")
+        st.caption(f"Model: `{active_model_name()}` · Embeddings: `{settings.embed_model}`")
 
 
 def render_trace(state: dict) -> None:
